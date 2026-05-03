@@ -13,6 +13,7 @@
 
 #include "pgm.h"
 #include "espstlink.h"
+#include "rp2040swim.h"
 #include "stlink.h"
 #include "stlinkv2.h"
 #include "stm8.h"
@@ -92,6 +93,17 @@ programmer_t pgms[] = {
 		espstlink_swim_read_range,
 		espstlink_swim_write_range,
 	},
+	{
+		"rp2040swim",
+		RP2040_SWIM,
+		0,
+		0,
+		rp2040swim_pgm_open,
+		rp2040swim_pgm_close,
+		rp2040swim_srst,
+		rp2040swim_swim_read_range,
+		rp2040swim_swim_write_range,
+	},
 	{ NULL },
 };
 
@@ -119,7 +131,7 @@ void print_help_and_exit(const char *name, bool err) {
 	}
 	fprintf(stream, ")\n");
 	fprintf(stream, "\t-S serialno    Specify programmer's serial number. If not given and more than one programmer is available, they'll be listed.\n");
-	fprintf(stream, "\t-d port        Specify the serial device for espstlink (default: /dev/ttyUSB0)\n");
+	fprintf(stream, "\t-d port        Specify the serial device for serial programmers (espstlink/rp2040swim; rp2040swim default: /dev/ttyACM0)\n");
 	fprintf(stream, "\t-p partno      Specify STM8 device\n");
 	fprintf(stream, "\t-l             List supported STM8 devices\n");
 	fprintf(stream, "\t-s memtype     Specify memory type (flash, eeprom, ram, opt or explicit address)\n");

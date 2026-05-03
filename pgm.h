@@ -9,6 +9,7 @@
 
 #include "stm8.h"
 #include "libespstlink.h"
+#include "librp2040swim.h"
 
 typedef enum {
     UNKNOWN,
@@ -32,7 +33,8 @@ typedef enum {
 	STLinkV2,
 	STLinkV21,
 	STLinkV3,
-	ESP_STLink
+	ESP_STLink,
+	RP2040_SWIM
 } programmer_type_t;
 
 typedef struct programmer_s {
@@ -58,6 +60,9 @@ typedef struct programmer_s {
 
 	/* Data for espstlink module. */
         espstlink_t * espstlink;
+
+	/* Data for rp2040swim module. */
+	rp2040swim_t *rp2040swim;
 	const char *port;
 } programmer_t;
 
