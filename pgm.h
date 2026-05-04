@@ -10,6 +10,7 @@
 #include "stm8.h"
 #include "libespstlink.h"
 #include "librp2040swim.h"
+#include <stdbool.h>
 
 typedef enum {
     UNKNOWN,
@@ -63,6 +64,7 @@ typedef struct programmer_s {
 
 	/* Data for rp2040swim module. */
 	rp2040swim_t *rp2040swim;
+	bool rp2040swim_connected;
 	const char *port;
 } programmer_t;
 

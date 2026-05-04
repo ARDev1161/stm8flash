@@ -693,13 +693,30 @@ int main(int argc, char **argv) {
 
 		/* flashing MCU */
 		int sent = pgm->write_range(pgm, part, buf, start, bytes_to_write, memtype);
+
+		if (sent < bytes_to_write) {
+			fprintf(stderr, "FAILED\n");
+			fprintf(stderr, "Requested %d bytes but wrote only %d.\n",
+					bytes_to_write, sent);
+
+			fclose(f);
+			free(buf);
+
+			if (pgm->close) {
+				pgm->close(pgm);
+			}
+			return EXIT_FAILURE;
+		}
+
 		if(pgm->reset) {
 			// Restarting core (if applicable)
 			pgm->reset(pgm);
 		}
+
 		fprintf(stderr, "OK\n");
 		fprintf(stderr, "Bytes written: %d\n", sent);
 		fclose(f);
+		free(buf);
 	} else if (action == UNLOCK) {
 		int sent;
 
@@ -717,6 +734,21 @@ int main(int argc, char **argv) {
 			}
 			/* flashing MCU */
 			sent = pgm->write_range(pgm, part, buf, start, bytes_to_write, memtype);
+
+			if (sent < bytes_to_write) {
+				fprintf(stderr, "FAILED\n");
+				fprintf(stderr, "Requested %d option bytes but wrote only %d.\n",
+						bytes_to_write, sent);
+
+				free(buf);
+
+				if (pgm->close) {
+					pgm->close(pgm);
+				}
+				return EXIT_FAILURE;
+			}
+
+			free(buf);
 		}
 		else if (part->read_out_protection_mode == ROP_STM8L) {
 			unsigned char c = 0xAA;
