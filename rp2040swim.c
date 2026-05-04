@@ -36,6 +36,30 @@ static bool rp2040swim_reconnect(programmer_t *pgm) {
   return rp2040swim_stall(pgm, true);
 }
 
+static bool rp2040swim_reconnect_with_retries(programmer_t *pgm, unsigned int retries) {
+  for (unsigned int attempt = 0; attempt < retries; attempt++) {
+    if (attempt != 0) {
+      usleep(50000);
+    }
+
+    if (rp2040swim_reconnect(pgm)) {
+      if(attempt != 0)
+        fprintf(stderr, "Attempt %d successs\n", attempt);
+      return true;
+    }
+
+    /*
+     * Best-effort target reset between attempts. Some STM8S parts miss the
+     * first debug entry when the user application was just running and the
+     * RP2040 had previously been fully passive.
+     */
+    (void)rp2040swim_reset_target(pgm->rp2040swim);
+
+    fprintf(stderr, "Attempt %d from %d failed!\n", attempt, retries);
+  }
+  return false;
+}
+
 static bool rp2040swim_wait_iapsr_mask(programmer_t *pgm,
                                        const stm8_device_t *device,
                                        uint8_t mask,
@@ -102,8 +126,32 @@ int rp2040swim_swim_read_range(programmer_t *pgm, const stm8_device_t *device,
   while (i < length) {
     size_t current_size = length - i;
     if (current_size > 1024) current_size = 1024;
-    if (!rp2040swim_read(pgm->rp2040swim, buffer + i, start + i, current_size)) {
-      return i;
+
+    bool ok = false;
+    for (unsigned int attempt = 0; attempt < 3; attempt++) {
+      if (attempt != 0) {
+        fprintf(stderr,
+                "rp2040swim: MEMORY_READ retry %u at 0x%06x len=%zu\n",
+                attempt, start + i, current_size);
+      }
+
+      if (rp2040swim_read(pgm->rp2040swim, buffer + i, start + i, current_size)) {
+        ok = true;
+        break;
+      }
+
+      /*
+       * The link can be in a transient bad state right after entering SWIM from
+       * a running user application. Re-enter debug and retry the same chunk.
+       * This is safe for normal reads, verify, and write pre-read because no
+       * flash programming has been triggered yet.
+       */
+      if (!rp2040swim_reconnect_with_retries(pgm, 7)) {
+        break;
+      }
+    }
+    if (!ok) {
+        return i;
     }
     i += (unsigned int)current_size;
   }
@@ -132,14 +180,14 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
 
   /*
    * Keep the default FLASH write path close to upstream stm8flash/espstlink:
-   * unlock program flash here, then let the generic code below set CR2/NCR2
-   * and write a full block through normal MEMORY_WRITE.
+   * read current flash first, then unlock program flash and let the generic code
+   * below set CR2/NCR2 and write a full block through normal MEMORY_WRITE.
    *
    * The RP2040 firmware-side FLASH_WRITE_BLOCK path is still useful for
    * experiments, but it currently has target-specific completion edge cases.
    * Enable it explicitly with RP2040SWIM_FW_FLASH=1.
    */
-  if (!rp2040swim_prepare_for_flash(pgm, device, memtype)) {
+  if (!rp2040swim_stall(pgm, true)) {
       return 0;
   }
 
@@ -179,6 +227,12 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
       memcpy(desired + length, current + length, rounded_size - length);
     }
 
+    if (!rp2040swim_prepare_for_flash(pgm, device, memtype)) {
+      free(current);
+      free(desired);
+      return 0;
+    }
+
     for (unsigned int off = 0; off < rounded_size; off += block_size) {
       if (memcmp(current + off, desired + off, block_size) == 0) {
         if (off < length) {
@@ -210,6 +264,9 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
   }
 
   if (memtype == OPT) {
+    if (!rp2040swim_prepare_for_flash(pgm, device, memtype)) {
+      return 0;
+    }
     if (!rp2040swim_write_byte(pgm, 0x80, device->regs.FLASH_CR2)) return 0;
     if (device->regs.FLASH_NCR2 != 0 && !rp2040swim_write_byte(pgm, 0x7f, device->regs.FLASH_NCR2)) return 0;
 
@@ -237,6 +294,13 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
     memcpy(desired, buffer, length);
     if (rounded_size > length) {
       memcpy(desired + length, current + length, rounded_size - length);
+    }
+
+    if ((memtype == FLASH || memtype == EEPROM) &&
+        !rp2040swim_prepare_for_flash(pgm, device, memtype)) {
+      free(current);
+      free(desired);
+      return 0;
     }
 
     for (i = 0; i < length; i += device->flash_block_size) {
@@ -281,7 +345,17 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
 
 void rp2040swim_srst(programmer_t *pgm) {
   if (!pgm || !pgm->rp2040swim) return;
+
+  /*
+   * The backend enters SWIM debug mode with DM_CSR2.STALL set so memory
+   * accesses are stable. Before handing control back to the target application,
+   * clear STALL and then reset. Without this, flash/verify succeeds but the
+   * user program may never run, which looks like a successfully programmed
+   * board with no LED blink.
+   */
+  (void)rp2040swim_stall(pgm, false);
   (void)rp2040swim_reset_target(pgm->rp2040swim);
+  (void)rp2040swim_release_target(pgm->rp2040swim);
 }
 
 bool rp2040swim_pgm_open(programmer_t *pgm) {
@@ -295,11 +369,22 @@ bool rp2040swim_pgm_open(programmer_t *pgm) {
   return rp2040swim_fetch_version(pgm->rp2040swim) &&
          rp2040swim_set_pins(pgm->rp2040swim, 2, 3, false) &&
          rp2040swim_set_speed(pgm->rp2040swim, false) &&
-         rp2040swim_reconnect(pgm);
+         rp2040swim_reconnect_with_retries(pgm, 7);
 }
 
 void rp2040swim_pgm_close(programmer_t *pgm) {
   if (!pgm) return;
+
+  /*
+   * Best-effort run release. Normal read/write operations keep the target
+   * stalled while the programmer is active; do not leave it halted after the
+   * process exits. Ignore errors because the target may already be reset or
+   * the SWIM link may be gone.
+   */
+  if (pgm->rp2040swim) {
+    (void)rp2040swim_stall(pgm, false);
+    (void)rp2040swim_release_target(pgm->rp2040swim);
+  }
   rp2040swim_close(pgm->rp2040swim);
   pgm->rp2040swim = NULL;
 }

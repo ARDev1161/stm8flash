@@ -34,6 +34,7 @@ bool rp2040swim_set_pins(rp2040swim_t *pgm, uint8_t swim_pin, uint8_t nrst_pin, 
 bool rp2040swim_set_speed(rp2040swim_t *pgm, bool high_speed);
 bool rp2040swim_enter_swim(rp2040swim_t *pgm);
 bool rp2040swim_reset_target(rp2040swim_t *pgm);
+bool rp2040swim_release_target(rp2040swim_t *pgm);
 
 bool rp2040swim_read(rp2040swim_t *pgm, uint8_t *buffer, unsigned int addr, size_t size);
 bool rp2040swim_write(rp2040swim_t *pgm, const uint8_t *buffer, unsigned int addr, size_t size);

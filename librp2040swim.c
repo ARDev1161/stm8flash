@@ -31,6 +31,7 @@
 #define RPSW_CMD_FLASH_ERASE    0x0au
 #define RPSW_CMD_FLASH_WRITE_BLOCK 0x0bu
 #define RPSW_CMD_GET_LAST_ERROR 0x0du
+#define RPSW_CMD_RELEASE_TARGET 0x0eu
 
 #define RPSW_STATUS_OK 0u
 
@@ -291,6 +292,11 @@ bool rp2040swim_enter_swim(rp2040swim_t *pgm) {
 bool rp2040swim_reset_target(rp2040swim_t *pgm) {
   uint16_t len = 0;
   return command(pgm, RPSW_CMD_RESET_TARGET, NULL, 0, NULL, &len);
+}
+
+bool rp2040swim_release_target(rp2040swim_t *pgm) {
+  uint16_t len = 0;
+  return command(pgm, RPSW_CMD_RELEASE_TARGET, NULL, 0, NULL, &len);
 }
 
 bool rp2040swim_read(rp2040swim_t *pgm, uint8_t *buffer, unsigned int addr, size_t size) {
