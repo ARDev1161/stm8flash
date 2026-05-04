@@ -131,12 +131,22 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
   unsigned int i = 0;
 
   /*
-   * For FLASH we use firmware-side FLASH_ERASE/FLASH_WRITE_BLOCK below.
-   * Do not unlock program flash before the pre-read; do it after comparing
-   * current/desired data, right before the firmware flash operation.
+   * Keep the default FLASH write path close to upstream stm8flash/espstlink:
+   * unlock program flash here, then let the generic code below set CR2/NCR2
+   * and write a full block through normal MEMORY_WRITE.
+   *
+   * The RP2040 firmware-side FLASH_WRITE_BLOCK path is still useful for
+   * experiments, but it currently has target-specific completion edge cases.
+   * Enable it explicitly with RP2040SWIM_FW_FLASH=1.
    */
-  if (memtype != FLASH && !rp2040swim_prepare_for_flash(pgm, device, memtype)) {
+  if (!rp2040swim_prepare_for_flash(pgm, device, memtype)) {
       return 0;
+  }
+
+  bool use_firmware_flash_path = false;
+  const char *fw_flash = getenv("RP2040SWIM_FW_FLASH");
+  if (fw_flash != NULL && fw_flash[0] != '\0' && strcmp(fw_flash, "0") != 0) {
+    use_firmware_flash_path = true;
   }
 
   /*
@@ -145,7 +155,7 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
    * firmware already has target-specific handling for erase/program timing,
    * post-trigger SWIM resync, and conservative byte programming.
    */
-  if (memtype == FLASH) {
+  if (memtype == FLASH && use_firmware_flash_path) {
     unsigned int block_size = device->flash_block_size;
     unsigned int rounded_size = ((length - 1) / block_size + 1) * block_size;
     unsigned char *current = malloc(rounded_size);
@@ -167,12 +177,6 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
     memcpy(desired, buffer, length);
     if (rounded_size > length) {
       memcpy(desired + length, current + length, rounded_size - length);
-    }
-
-    if (!rp2040swim_prepare_for_flash(pgm, device, memtype)) {
-      free(current);
-      free(desired);
-      return 0;
     }
 
     for (unsigned int off = 0; off < rounded_size; off += block_size) {
