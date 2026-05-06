@@ -20,6 +20,11 @@
 
 #define RECONNECT_ATTEMPTS 7
 
+static bool rp2040swim_use_high_speed(void) {
+  const char *hs = getenv("RP2040SWIM_HS");
+  return (hs != NULL) && (hs[0] != '\0') && (strcmp(hs, "0") != 0);
+}
+
 static int rp2040swim_read_byte(programmer_t *pgm, unsigned int addr) {
   uint8_t byte = 0;
   if (!rp2040swim_read(pgm->rp2040swim, &byte, addr, 1)) return -1;
@@ -38,7 +43,14 @@ static bool rp2040swim_stall(programmer_t *pgm, bool stall) {
 
 static bool rp2040swim_reconnect(programmer_t *pgm) {
   if (!rp2040swim_enter_swim(pgm->rp2040swim)) return false;
-  return rp2040swim_stall(pgm, true);
+
+  if (rp2040swim_use_high_speed()) {
+    fprintf(stderr, "rp2040swim: experimental high-speed SWIM enabled\n");
+    if (!rp2040swim_set_speed(pgm->rp2040swim, true)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 
@@ -353,32 +365,38 @@ int rp2040swim_swim_write_range(programmer_t *pgm, const stm8_device_t *device,
 }
 
 static bool rp2040swim_clear_stall(programmer_t *pgm) {
-  if (!rp2040swim_stall(pgm, false)) {
-    fprintf(stderr, "rp2040swim: warning: failed to clear STALL\n");
-    return false;
+  for (unsigned attempt = 0; attempt < 3; attempt++) {
+    if (attempt != 0) {
+      usleep(5000);
+    }
+
+    if (rp2040swim_stall(pgm, false)) {
+      return true;
+    }
   }
 
-  return true;
+  fprintf(stderr, "rp2040swim: warning: failed to clear STALL\n");
+  return false;
 }
-
 void rp2040swim_srst(programmer_t *pgm) {
   if (!pgm || !pgm->rp2040swim) return;
 
   /*
    * Reset/run policy:
    *
-   * Do not try to finish the old SWIM session. It may already be invalid after
-   * flash programming or reset. Instead:
+   * Do not try to continue the old SWIM session after reset.
+   * Instead:
    *   - release old pins/session,
    *   - hardware reset the target,
    *   - enter SWIM again,
    *   - clear STALL,
-   *   - release pins.
+   *   - release pins so user firmware can run.
    *
-   * This makes -R a recovery/run command and also makes -w start the firmware
-   * because main.c calls pgm->reset() after successful write.
+   * This is intentionally the old working flow. It is needed after -w,
+   * because stm8flash calls pgm->reset() after successful write.
    */
   pgm->rp2040swim_connected = false;
+
   (void)rp2040swim_release_target(pgm->rp2040swim);
   usleep(1000);
 
@@ -405,14 +423,8 @@ bool rp2040swim_pgm_open(programmer_t *pgm) {
 
   pgm->rp2040swim_connected = false;
 
-  /*
-   * Do not enter SWIM here.
-   * stm8flash calls open() even for plain -R, and entering debug mode there
-   * prevents the user application from starting after reset.
-   */
   if (!rp2040swim_fetch_version(pgm->rp2040swim) ||
-      !rp2040swim_set_pins(pgm->rp2040swim, 2, 3, false) ||
-      !rp2040swim_set_speed(pgm->rp2040swim, false))
+      !rp2040swim_set_pins(pgm->rp2040swim, 2, 3, false))
     {
       rp2040swim_close(pgm->rp2040swim);
       pgm->rp2040swim = NULL;
@@ -420,9 +432,6 @@ bool rp2040swim_pgm_open(programmer_t *pgm) {
       return false;
     }
 
-    /*
-     * Pure RP2040-side release. No STM8 debug/memory access.
-     */
     (void)rp2040swim_release_target(pgm->rp2040swim);
 
     return true;
